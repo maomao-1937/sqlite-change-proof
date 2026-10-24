@@ -1,0 +1,12 @@
+__pycache__/
+*.py[cod]
+examples/generated/
+*.db
+*.db-wal
+*.db-shm
+*.db-journal
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+*.sqlite-journal
+report.json
