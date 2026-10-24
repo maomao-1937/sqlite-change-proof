@@ -17,7 +17,7 @@ python -m unittest discover -s tests -v
 python examples/make_samples.py
 ```
 
-Observed: **27 tests passed**, and the generator succeeded. Re-running sample generation succeeded without changing sample bytes.
+Observed after the Windows test-harness correction described below: **29 tests passed**, and the generator succeeded. Re-running sample generation succeeded without changing sample bytes.
 
 The exact argument arrays in `checks.json` were executed with the current Python interpreter and each return code was compared to its `exit` field:
 
@@ -42,7 +42,25 @@ for check in json.loads(Path("checks.json").read_text()):
     assert result.returncode == check["exit"], (check, result.stdout, result.stderr)
 ```
 
-A separate fresh temporary source-only copy (excluding `.git`, `__pycache__`, and generated samples) also passed **27 tests and all 5 checks**, regenerating synthetic databases from source. This confirms that committed binary databases are not required.
+A separate fresh temporary source-only copy (excluding `.git`, `__pycache__`, and generated samples) also passed **29 tests and all 5 checks**, regenerating synthetic databases from source. This confirms that committed binary databases are not required.
+
+## Windows CI failure and test-harness correction
+
+The initial published revision passed Ubuntu CI but failed the Windows job (job ID `120746233483`, Python 3.11.9) in `test_changed_source_detection`: `AssertionError: InputError not raised`. The Windows log showed that all other tests passed.
+
+Investigation reproduced that failure locally using both an existing directory followed by `..` and a real Windows 8.3 short-directory alias. `compare()` resolves input paths, while the test's injected mutation used lexical path equality. Aliased spellings were unequal, so the test never appended its mutation; the source remained 8,192 bytes. This establishes the test-harness failure mechanism. The original remote log did not print temporary paths, so its exact alias spelling was not observed.
+
+Before changing the hook, two new alias regression tests both failed with the same `InputError not raised` assertion. The hook now uses `Path.samefile()` to recognize the actual second snapshot, and asserts both exactly one mutation and the expected seven-byte source-size increase. **Production comparison/fingerprint code was unchanged.** The portable `..` regression always runs; the Windows-specific 8.3 regression skips on other systems or volumes without short-name support. Both executed and passed locally.
+
+Fresh validation commands after the correction:
+
+```sh
+python -m unittest discover -s tests -p test_cli.py -k test_changed_source_detection -v
+python -m unittest discover -s tests -v
+python ci_checks.py
+```
+
+Observed: **3 focused tests passed, 29 total tests passed, and 5/5 CLI checks passed**. A fresh source-only temporary copy passed the same full suite and CLI checks. Remote CI for the corrected revision is pending controller publication/rerun; this record does not claim that Windows CI has passed the correction yet.
 
 ## Meaningful coverage
 
@@ -52,4 +70,4 @@ A mutation injected between actual snapshot reads checks cross-read source finge
 
 ## Limits of validation
 
-This record confirms local Windows execution only. A cross-platform workflow may be provided separately; no remote CI pass or Ubuntu execution is claimed here. FTS5 tests require SQLite built with FTS5 (present locally and in the intended standard CPython CI distributions). There was no production data, live database, concurrent workload stress test, external-user adoption test, performance benchmark, hostile SQLite fuzzing, or causal attribution verification. Metadata fingerprint checks are bounded race detection, not a proof against adversarial change-and-restore behavior.
+The current correction has been verified locally on Windows; the initial revision's remote Ubuntu success and Windows failure are recorded above. No corrected-revision remote CI success is claimed yet. FTS5 tests require SQLite built with FTS5 (present locally and in the intended standard CPython CI distributions). There was no production data, live database, concurrent workload stress test, external-user adoption test, performance benchmark, hostile SQLite fuzzing, or causal attribution verification. Metadata fingerprint checks are bounded race detection, not a proof against adversarial change-and-restore behavior.

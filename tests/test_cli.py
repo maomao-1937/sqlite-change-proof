@@ -161,15 +161,46 @@ class ProofTests(unittest.TestCase):
         self.db(self.a)
         self.db(self.b)
         real = proof.read_snapshot
+        initial_size = self.a.stat().st_size
+        mutations = []
         def changing(path, tables):
             answer = real(path, tables)
-            if Path(path) == self.b:
+            # compare() resolves paths; Windows TEMP may use an 8.3 alias.
+            # Trigger on actual file identity, not the path's lexical spelling.
+            if Path(path).samefile(self.b):
                 with self.a.open('ab') as stream:
                     stream.write(b'changed')
+                mutations.append(path)
             return answer
         with patch.object(proof, 'read_snapshot', side_effect=changing):
             with self.assertRaisesRegex(proof.InputError, 'changed'):
                 proof.compare(self.a, self.b, ['items'])
+        self.assertEqual(len(mutations), 1, 'mutation hook must execute exactly once')
+        self.assertEqual(self.a.stat().st_size, initial_size + len(b'changed'))
+
+    def test_changed_source_detection_with_dotdot_alias(self):
+        component = self.b.parent / 'alias-component'
+        component.mkdir()
+        self.b = component / '..' / self.b.name
+        self.assertNotEqual(self.b, self.b.resolve())
+        self.test_changed_source_detection()
+
+    @unittest.skipUnless(sys.platform == 'win32', 'Windows short-path aliases only')
+    def test_changed_source_detection_with_windows_short_path(self):
+        import ctypes
+        from ctypes import wintypes
+        directory = self.b.parent / 'directory with spaces'
+        directory.mkdir()
+        get_short_path = ctypes.WinDLL('kernel32', use_last_error=True).GetShortPathNameW
+        get_short_path.argtypes = (wintypes.LPCWSTR, wintypes.LPWSTR, wintypes.DWORD)
+        get_short_path.restype = wintypes.DWORD
+        buffer = ctypes.create_unicode_buffer(32768)
+        length = get_short_path(str(directory), buffer, len(buffer))
+        if not length or length >= len(buffer) or Path(buffer.value) == directory:
+            self.skipTest('8.3 short-name creation unavailable on this volume')
+        self.b = Path(buffer.value) / self.b.name
+        self.assertNotEqual(self.b, self.b.resolve())
+        self.test_changed_source_detection()
 
     def test_virtual_and_shadow_are_unverified(self):
         for path in (self.a, self.b):
